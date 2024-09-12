@@ -66,9 +66,9 @@ func NewGRPC(opts ...GRPCOption) (grpc.StreamHandler, io.Closer) {
 	target := net.JoinHostPort(gh.proxyCfg.Host, strconv.Itoa(int(gh.proxyCfg.Port)))
 
 	return proxy.TransparentHandler(func(ctx context.Context, fullMethodName string) (cctx context.Context, conn *grpc.ClientConn, err error) {
-		for _, methodName := range gh.proxyCfg.OriginHealthCheckPaths {
-			if fullMethodName == methodName {
-				glg.Info("Authorization checking skipped on: " + fullMethodName)
+		for _, pattern := range gh.proxyCfg.OriginHealthCheckPaths {
+			if fullMethodName == pattern || wildcardMatch(pattern, fullMethodName){
+				glg.Infof("Authorization checking skipped on: %s,\tby %s pattern", fullMethodName, pattern)
 				conn, err = gh.dialContext(ctx, target, dialOpts...)
 				return ctx, conn, err
 			}

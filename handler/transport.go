@@ -60,8 +60,8 @@ func (t *transport) RoundTrip(r *http.Request) (*http.Response, error) {
 	// bypass authoriztion
 	if len(r.URL.Path) != 0 { // prevent bypassing empty path on default config
 		for _, urlPath := range t.cfg.OriginHealthCheckPaths {
-			if urlPath == r.URL.Path {
-				glg.Info("Authorization checking skipped on: " + r.URL.Path)
+			if urlPath == r.URL.Path || wildcardMatch(urlPath, r.URL.Path) {
+				glg.Infof("Authorization checking skipped on: %s,\tby %s pattern", r.URL.Path, urlPath)
 				r.TLS = nil
 				startTime = time.Now()
 				return t.RoundTripper.RoundTrip(r)

@@ -200,3 +200,23 @@ func handleError(rw http.ResponseWriter, r *http.Request, err error) {
 	}
 	rw.WriteHeader(status)
 }
+
+func wildcardMatch(pattern, target string) bool {
+	parts := strings.Split(pattern, "*")
+	startIndex := 0
+	pLen := len(target)
+	for _, part := range parts {
+		if part == "" {
+			continue
+		}
+		index := strings.Index(target[startIndex:], part)
+		if index == -1 {
+			return false
+		}
+		startIndex += index + len(part)
+		if startIndex > pLen {
+			return false
+		}
+	}
+	return true
+}
