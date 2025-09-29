@@ -78,7 +78,6 @@ func TestNew(t *testing.T) {
 				Version: "v2.0.0",
 				Server: Server{
 					Port:              8082,
-					Timeout:           "10s",
 					ShutdownTimeout:   "10s",
 					ShutdownDelay:     "9s",
 					DisableKeepAlives: true,
@@ -108,6 +107,7 @@ func TestNew(t *testing.T) {
 					Debug: Debug{
 						Enable:    false,
 						Port:      6083,
+						Timeout:   "10s",
 						Dump:      true,
 						Profiling: true,
 					},
@@ -222,8 +222,9 @@ func TestNew(t *testing.T) {
 					},
 				},
 				Log: Log{
-					Level: "debug",
-					Color: true,
+					Level:                         "debug",
+					Color:                         true,
+					OutputAuthorizedPrincipalName: false,
 				},
 			},
 		},

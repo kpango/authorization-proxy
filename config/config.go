@@ -55,9 +55,6 @@ type Server struct {
 	// Port represents the server listening port.
 	Port int `yaml:"port"`
 
-	// Timeout represents the maximum request handling duration.
-	Timeout string `yaml:"timeout"`
-
 	// ShutdownTimeout represents the duration before force shutdown.
 	ShutdownTimeout string `yaml:"shutdownTimeout"`
 
@@ -126,6 +123,9 @@ type Debug struct {
 
 	// Port represents debug server port.
 	Port int `yaml:"port"`
+
+	// Timeout represents the maximum request handling duration for debug server.
+	Timeout string `yaml:"timeout"`
 
 	// Dump represents whether to enable memory dump functionality.
 	Dump bool `yaml:"dump"`
@@ -296,6 +296,9 @@ type Log struct {
 
 	// Color represents whether to print ANSI escape code.
 	Color bool `yaml:"color"`
+
+	// Output the name of the authenticated Principal to the log
+	OutputAuthorizedPrincipalName bool `yaml:"outputAuthorizedPrincipalName"`
 }
 
 // Transport exposes a subset of Transport parameters. reference: https://github.com/golang/go/blob/master/src/net/http/transport.go#L95

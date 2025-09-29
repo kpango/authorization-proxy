@@ -255,7 +255,7 @@ func TestNew(t *testing.T) {
 					cfg: cfg,
 				},
 				wantErr:    true,
-				wantErrStr: "cannot NewMetrics(): cannot register metrics: duplicate metrics collector registration attempted",
+				wantErrStr: "cannot NewMetrics(): cannot register metrics http_origin_latency_in_seconds: duplicate metrics collector registration attempted",
 			}
 		}(),
 		{
@@ -1112,6 +1112,40 @@ func Test_newAuthzD(t *testing.T) {
 							Enable:         true,
 							RoleAuthHeader: "Athenz-Role-Auth",
 						},
+					},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "test outputAuthorizedPrincipalName true",
+			args: args{
+				cfg: config.Config{
+					Athenz: config.Athenz{
+						URL:     "athenz.io",
+						Timeout: "30s",
+						CAPath:  "../test/data/dummyCa.pem",
+					},
+					Authorization: config.Authorization{
+						AthenzDomains: []string{"dummyDom1", "dummyDom2"},
+						PublicKey: config.PublicKey{
+							SysAuthDomain:   "dummy.sys.auth",
+							RefreshPeriod:   "10s",
+							ETagExpiry:      "10s",
+							ETagPurgePeriod: "10s",
+						},
+						Policy: config.Policy{
+							ExpiryMargin:  "10s",
+							RefreshPeriod: "10s",
+							PurgePeriod:   "10s",
+						},
+						RoleToken: config.RoleToken{
+							Enable:         true,
+							RoleAuthHeader: "Athenz-Role-Auth",
+						},
+					},
+					Log: config.Log{
+						OutputAuthorizedPrincipalName: true,
 					},
 				},
 			},

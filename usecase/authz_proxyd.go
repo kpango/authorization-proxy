@@ -65,7 +65,10 @@ func New(cfg config.Config) (AuthzProxyDaemon, error) {
 
 	var metrics service.Metrics
 	if cfg.Server.Metrics.Port > 0 {
-		metrics, err = service.NewMetrics()
+		metrics, err = service.NewMetrics(
+			service.WithPrincipalCacheSizeFunc(athenz.GetPrincipalCacheSize),
+			service.WithPrincipalCacheLenFunc(athenz.GetPrincipalCacheLen),
+		)
 		if err != nil {
 			return nil, errors.Wrap(err, "cannot NewMetrics()")
 		}
@@ -306,6 +309,13 @@ func newAuthzD(cfg config.Config) (service.Authorizationd, error) {
 		}
 	}
 
+	var logOpts []authorizerd.Option
+	if cfg.Log.OutputAuthorizedPrincipalName {
+		logOpts = []authorizerd.Option{
+			authorizerd.WithOutputAuthorizedPrincipalLog(),
+		}
+	}
+
 	authzOptss := [][]authorizerd.Option{
 		sharedOpts,
 		pubkeyOpts,
@@ -314,6 +324,7 @@ func newAuthzD(cfg config.Config) (service.Authorizationd, error) {
 		rcOpts,
 		atOpts,
 		jwkOpts,
+		logOpts,
 	}
 	var authzOptsLen int
 	for _, opts := range authzOptss {
