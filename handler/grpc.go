@@ -1,3 +1,4 @@
+//
 // Copyright 2023 LY Corporation
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -11,24 +12,29 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+//
 
 package handler
 
 import (
 	"context"
+	"crypto/x509"
 	"io"
 	"net"
 	"strconv"
 	"strings"
-	"sync"
 
+	"github.com/kpango/gache/v2"
 	"github.com/kpango/glg"
 	"github.com/mwitkow/grpc-proxy/proxy"
 	"golang.org/x/sync/singleflight"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/connectivity"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 
 	authorizerd "github.com/AthenZ/athenz-authorizer/v5"
@@ -43,8 +49,9 @@ const (
 type GRPCHandler struct {
 	proxyCfg       config.Proxy
 	roleCfg        config.RoleToken
+	atCfg          config.AccessToken
 	authorizationd service.Authorizationd
-	connMap        sync.Map
+	connMap        gache.Map[string, *grpc.ClientConn]
 	group          singleflight.Group
 }
 
@@ -59,13 +66,12 @@ func NewGRPC(opts ...GRPCOption) (grpc.StreamHandler, io.Closer) {
 	}
 
 	dialOpts := []grpc.DialOption{
-		grpc.WithCodec(proxy.Codec()),
-		grpc.WithInsecure(),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	}
 
 	target := net.JoinHostPort(gh.proxyCfg.Host, strconv.Itoa(int(gh.proxyCfg.Port)))
 
-	return proxy.TransparentHandler(func(ctx context.Context, fullMethodName string) (cctx context.Context, conn *grpc.ClientConn, err error) {
+	return proxy.TransparentHandler(func(ctx context.Context, fullMethodName string) (cctx context.Context, conn grpc.ClientConnInterface, err error) {
 		for _, pattern := range gh.proxyCfg.OriginHealthCheckPaths {
 			if fullMethodName == pattern || wildcardMatch(pattern, fullMethodName) {
 				glg.Infof("Authorization checking skipped on: %s,\tby %s pattern", fullMethodName, pattern)
@@ -73,22 +79,10 @@ func NewGRPC(opts ...GRPCOption) (grpc.StreamHandler, io.Closer) {
 				return ctx, conn, err
 			}
 		}
-
-		md, ok := metadata.FromIncomingContext(ctx)
-		if !ok {
-			return ctx, nil, status.Errorf(codes.Unauthenticated, ErrGRPCMetadataNotFound)
-		}
-
-		rts := md.Get(gh.roleCfg.RoleAuthHeader)
-		if len(rts) == 0 {
-			return ctx, nil, status.Errorf(codes.Unauthenticated, ErrRoleTokenNotFound)
-		}
-
-		p, err := gh.authorizationd.AuthorizeRoleToken(ctx, rts[0], gRPC, fullMethodName)
+		p, err := gh.authorize(ctx, fullMethodName)
 		if err != nil {
-			return ctx, nil, status.Errorf(codes.Unauthenticated, err.Error())
+			return nil, nil, err
 		}
-
 		ctx = metadata.AppendToOutgoingContext(ctx,
 			"X-Athenz-Principal", p.Name(),
 			"X-Athenz-Role", strings.Join(p.Roles(), ","),
@@ -105,9 +99,58 @@ func NewGRPC(opts ...GRPCOption) (grpc.StreamHandler, io.Closer) {
 	}), gh
 }
 
+func (gh *GRPCHandler) authorize(ctx context.Context, fullMethodName string) (p authorizerd.Principal, err error) {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return nil, status.Errorf(codes.Unauthenticated, ErrGRPCMetadataNotFound)
+	}
+	p, err = gh.authorizeRoleToken(ctx, fullMethodName, md)
+	if err == nil {
+		return p, nil
+	}
+	return gh.authorizeAccessToken(ctx, fullMethodName, md)
+}
+func (gh *GRPCHandler) authorizeRoleToken(ctx context.Context, fullMethodName string, md metadata.MD) (p authorizerd.Principal, err error) {
+	if !gh.roleCfg.Enable {
+		return nil, status.Errorf(codes.Unauthenticated, ErrRoleTokenDisabled)
+	}
+	rts := md.Get(gh.roleCfg.RoleAuthHeader)
+	if len(rts) == 0 {
+		return nil, status.Errorf(codes.Unauthenticated, ErrRoleTokenNotFound)
+	}
+	p, err = gh.authorizationd.AuthorizeRoleToken(ctx, rts[0], gRPC, fullMethodName)
+	if err != nil {
+		return nil, status.Errorf(codes.Unauthenticated, err.Error())
+	}
+	return p, nil
+}
+
+func (gh *GRPCHandler) authorizeAccessToken(ctx context.Context, fullMethodName string, md metadata.MD) (p authorizerd.Principal, err error) {
+	if !gh.atCfg.Enable {
+		return nil, status.Errorf(codes.Unauthenticated, ErrAccessTokenDisabled)
+	}
+	rts := md.Get(gh.atCfg.AccessTokenAuthHeader)
+	if len(rts) == 0 {
+		return nil, status.Errorf(codes.Unauthenticated, ErrAccessTokenNotFound)
+	}
+	cs, ok := clientCertFromContext(ctx)
+	if ok && cs != nil && cs[0] != nil {
+		p, err = gh.authorizationd.AuthorizeAccessToken(ctx, rts[0], gRPC, fullMethodName, cs[0])
+		if err != nil {
+			p, err = gh.authorizationd.AuthorizeAccessToken(ctx, rts[0], gRPC, fullMethodName, nil)
+		}
+	} else {
+		p, err = gh.authorizationd.AuthorizeAccessToken(ctx, rts[0], gRPC, fullMethodName, nil)
+	}
+	if err != nil {
+		return nil, status.Errorf(codes.Unauthenticated, err.Error())
+	}
+	return p, nil
+}
+
 func (gh *GRPCHandler) Close() error {
-	gh.connMap.Range(func(target, v interface{}) bool {
-		if conn, ok := v.(*grpc.ClientConn); ok {
+	gh.connMap.Range(func(target string, conn *grpc.ClientConn) bool {
+		if conn != nil {
 			if err := conn.Close(); err != nil {
 				glg.Warnf("failed to close connection. target: %s, err: %v", target, err)
 			}
@@ -119,14 +162,14 @@ func (gh *GRPCHandler) Close() error {
 }
 
 func (gh *GRPCHandler) dialContext(ctx context.Context, target string, dialOpts ...grpc.DialOption) (conn *grpc.ClientConn, err error) {
-	if v, ok := gh.connMap.Load(target); ok {
-		if conn, ok = v.(*grpc.ClientConn); ok && isHealthy(conn) {
+	if conn, ok := gh.connMap.Load(target); ok {
+		if isHealthy(conn) {
 			return conn, nil
 		}
 	}
 
 	v, err, _ := gh.group.Do(target, func() (interface{}, error) {
-		conn, err := grpc.DialContext(ctx, target, dialOpts...)
+		conn, err := grpc.NewClient(target, dialOpts...)
 		if err != nil {
 			return nil, err
 		}
@@ -138,7 +181,23 @@ func (gh *GRPCHandler) dialContext(ctx context.Context, target string, dialOpts 
 			return conn, nil
 		}
 	}
-	return grpc.DialContext(ctx, target, dialOpts...)
+	return grpc.NewClient(target, dialOpts...)
+}
+
+func clientCertFromContext(ctx context.Context) ([]*x509.Certificate, bool) {
+	pr, ok := peer.FromContext(ctx)
+	if !ok || pr == nil || pr.AuthInfo == nil {
+		return nil, false
+	}
+	ti, ok := pr.AuthInfo.(credentials.TLSInfo)
+	if !ok {
+		return nil, false
+	}
+	state := ti.State
+	if len(state.PeerCertificates) == 0 {
+		return nil, false
+	}
+	return state.PeerCertificates, true
 }
 
 func isHealthy(conn *grpc.ClientConn) bool {
